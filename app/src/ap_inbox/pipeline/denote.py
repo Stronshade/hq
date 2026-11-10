@@ -423,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
         "--llm-refine",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Escalate low-confidence classify/extract to local Qwen (default: on)",
+        help="Escalate low-confidence classify/extract to the configured chat model (default: on)",
     )
     parser.add_argument(
         "--skip-chunks",

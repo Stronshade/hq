@@ -1,4 +1,11 @@
-"""nomic-embed-text via Ollama embeddings API + in-app cosine ranking (no pgvector)."""
+"""Embeddings via an OpenAI-compatible `/v1/embeddings` endpoint.
+
+Default model is `nomic-embed-text` on the same host as chat (Ollama). Set
+`EMBED_MODEL` plus optional `EMBED_BASE_URL` / `EMBED_API_KEY` for another host.
+Stored vectors are JSON floats; cosine ranking stays in-app (no pgvector).
+A model change produces a different vector size — re-run denote without
+`--skip-chunks` before searching again.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,7 @@ import logging
 import math
 from typing import Sequence
 
-import httpx
+from openai import AsyncOpenAI, OpenAI
 
 from ap_inbox.config import Settings, get_settings
 
@@ -28,29 +35,37 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
+def _vector_from_response(data: list) -> list[float]:
+    if not data:
+        raise RuntimeError("embeddings response contained no vectors")
+    emb = data[0].embedding
+    if not emb:
+        raise RuntimeError("embeddings response missing embedding values")
+    return [float(x) for x in emb]
+
+
 async def embed_texts(
     texts: list[str],
     *,
     settings: Settings | None = None,
 ) -> list[list[float]]:
-    """Embed one or more texts with Ollama. Empty strings yield empty vectors."""
+    """Embed one or more texts. Empty strings yield empty vectors."""
     s = settings or get_settings()
     out: list[list[float]] = []
-    async with httpx.AsyncClient(base_url=s.ollama_host, timeout=120.0) as client:
+    client = AsyncOpenAI(
+        api_key=s.effective_embed_api_key,
+        base_url=s.effective_embed_base_url,
+        timeout=120.0,
+    )
+    try:
         for text in texts:
             if not (text or "").strip():
                 out.append([])
                 continue
-            resp = await client.post(
-                "/api/embeddings",
-                json={"model": s.embed_model, "prompt": text},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            emb = data.get("embedding")
-            if not isinstance(emb, list):
-                raise RuntimeError(f"unexpected embeddings payload: {data!r}")
-            out.append([float(x) for x in emb])
+            resp = await client.embeddings.create(model=s.embed_model, input=text)
+            out.append(_vector_from_response(resp.data))
+    finally:
+        await client.close()
     return out
 
 
@@ -67,23 +82,22 @@ def embed_texts_sync(
     """Sync helper for denote batch worker."""
     s = settings or get_settings()
     out: list[list[float]] = []
-    with httpx.Client(base_url=s.ollama_host, timeout=120.0) as client:
+    client = OpenAI(
+        api_key=s.effective_embed_api_key,
+        base_url=s.effective_embed_base_url,
+        timeout=120.0,
+    )
+    try:
         for text in texts:
             if not (text or "").strip():
                 out.append([])
                 continue
             try:
-                resp = client.post(
-                    "/api/embeddings",
-                    json={"model": s.embed_model, "prompt": text},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                emb = data.get("embedding")
-                if not isinstance(emb, list):
-                    raise RuntimeError(f"unexpected embeddings payload: {data!r}")
-                out.append([float(x) for x in emb])
+                resp = client.embeddings.create(model=s.embed_model, input=text)
+                out.append(_vector_from_response(resp.data))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("embed failed: %s", exc)
                 out.append([])
+    finally:
+        client.close()
     return out

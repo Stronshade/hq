@@ -1,6 +1,7 @@
-"""Sync Ollama JSON helpers for hybrid classify + invoice extract refine.
+"""Sync JSON helpers for hybrid classify + invoice extract refine.
 
-Failures are structured — never silent. Callers keep rules/regex results on error.
+Calls the configured OpenAI-compatible chat endpoint. Failures are structured —
+callers keep rules/regex results on error.
 """
 
 from __future__ import annotations
@@ -13,9 +14,8 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-import httpx
-
 from ap_inbox.config import Settings, get_settings
+from ap_inbox.llm.openai_client import complete_chat_sync
 
 logger = logging.getLogger(__name__)
 
@@ -86,33 +86,22 @@ def _chat_json(
     """Return (parsed_dict|None, model, error|None)."""
     s = settings or get_settings()
     model = s.chat_model
-    payload: dict[str, Any] = {
-        "model": model,
-        "stream": False,
-        "format": "json",
-        # Qwen3 "thinking" balloons latency on CPU; disable for batch JSON refine.
-        "think": False,
-        "options": {
-            "num_ctx": min(int(s.llm_num_ctx or 16384), 8192),
-            "temperature": 0.1,
-            "num_predict": 512,
-        },
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
     try:
-        # Connect timeout short; read timeout long (14b on CPU can exceed several minutes).
-        timeout_cfg = httpx.Timeout(timeout, connect=30.0)
-        with httpx.Client(base_url=s.ollama_host, timeout=timeout_cfg) as client:
-            resp = client.post("/api/chat", json=payload)
-            resp.raise_for_status()
-            body = resp.json()
-        content = ""
-        msg = body.get("message") if isinstance(body, dict) else None
-        if isinstance(msg, dict):
-            content = msg.get("content") or ""
+        # Connect timeout is short inside the client; read timeout stays long
+        # (a 14B model on CPU can take several minutes).
+        content = complete_chat_sync(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            settings=s,
+            temperature=0.1,
+            max_tokens=512,
+            json_mode=True,
+            timeout=timeout,
+            num_ctx=min(int(s.llm_num_ctx or 16384), 8192),
+            disable_think=True,
+        )
         parsed = _extract_json_object(content)
         return parsed, model, None
     except Exception as exc:  # noqa: BLE001
@@ -142,7 +131,7 @@ def llm_classify_text(
     text_excerpt: str | None = None,
     settings: Settings | None = None,
 ) -> LlmClassifyResult:
-    """Classify message or attachment text into DOC_TYPES via Ollama JSON."""
+    """Classify message or attachment text into DOC_TYPES via the configured chat model."""
     from ap_inbox.pipeline.classify import DOC_TYPES
 
     s = settings or get_settings()

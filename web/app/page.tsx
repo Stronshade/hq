@@ -19,6 +19,69 @@ function formatConfidence(value: number | null): string {
   return `${Math.round(value * 100)}%`;
 }
 
+const DEMO_PROMPTS: { label: string; question: string }[] = [
+  {
+    label: "Classification",
+    question:
+      "How are the emails in this inbox classified? Give counts by document type (invoice, statement, payment reminder, remittance, escalation, final notice, other). For anything marked low confidence or error, say how many and why.",
+  },
+  {
+    label: "Thomson invoice",
+    question:
+      "Show the key fields for Thomson Reuters invoice 853825322: vendor, invoice number, amount, currency, invoice date, due date, and confidence. Cite the message id. If a field is missing, say so.",
+  },
+  {
+    label: "Punch invoices",
+    question:
+      "List Punch Distribution invoices you have extracted, with invoice number, amount, date, and confidence. Do not invent rows beyond what the tool returns, and say if the list is truncated.",
+  },
+  {
+    label: "Punch chase",
+    question:
+      "For Punch Distribution, which chase emails do we have? For each, give the stage (reminder, escalation, or final notice), the invoice numbers they mention, whether that invoice is actually in the inbox, and your confidence. Cite message ids.",
+  },
+  {
+    label: "Final notices",
+    question:
+      "List every final notice in the inbox. For each, give vendor, subject, confidence, and whether a chased invoice is present. If a “final notice” does not look like an unpaid AP invoice, say that.",
+  },
+  {
+    label: "FPL chase",
+    question:
+      "Which FPL Communications chase emails refer to invoices that are not in the inbox? Give the stage and the referenced invoice numbers. If no invoice number was extracted, say that explicitly.",
+  },
+  {
+    label: "Missing files",
+    question:
+      "Which attachments are missing from disk? Give fil_id, filename, and the error. Do not guess their contents.",
+  },
+  {
+    label: "Unreadable PDFs",
+    question:
+      "Which invoice extractions failed because the PDF had no text? Quote the error detail and the confidence or status. Do not invent amounts for those files.",
+  },
+  {
+    label: "Glass House PDF",
+    question:
+      "Find the Glass House Brands invoice PDF (filename contains Glass-House-Brands, fil_id fil_4xyrdndg). Check attachment status first. If it is ok, read the text and pull vendor, invoice number, amount, and dates. If you cannot read it, stop and say why.",
+  },
+  {
+    label: "Low confidence",
+    question:
+      "Show messages classified as “other” with low confidence. How many are there, what confidence did we assign, and what is the rationale? Do not force them into invoice or reminder.",
+  },
+  {
+    label: "Deliberate miss",
+    question:
+      "Is invoice ZZ-DOES-NOT-EXIST-999 in the inbox? Say whether you found it, and your confidence.",
+  },
+  {
+    label: "Statements vs remittances",
+    question:
+      "Show a few emails classified as statements and a few classified as remittances. Include subject, confidence, and rationale. If a remittance label looks like a payment reminder, say so.",
+  },
+];
+
 function gapClass(kind: string): string {
   const lower = kind.toLowerCase();
   if (
@@ -28,7 +91,11 @@ function gapClass(kind: string): string {
   ) {
     return `${styles.listItem} ${styles.listItemDanger}`;
   }
-  if (lower.includes("low") || lower.includes("unsure")) {
+  if (
+    lower.includes("low") ||
+    lower.includes("unsure") ||
+    lower.includes("no_match")
+  ) {
     return `${styles.listItem} ${styles.listItemWarn}`;
   }
   return styles.listItem;
@@ -58,8 +125,8 @@ export default function HomePage() {
     );
   }
 
-  async function ask() {
-    const trimmed = question.trim();
+  async function ask(nextQuestion?: string) {
+    const trimmed = (nextQuestion ?? question).trim();
     if (!trimmed || streaming) return;
 
     abortRef.current?.abort();
@@ -168,9 +235,23 @@ export default function HomePage() {
           <div className={styles.messages}>
             {messages.length === 0 ? (
               <div className={styles.empty}>
-                <strong>Start with a question</strong>
-                Try “Which vendors sent final notices last week?” or “Is invoice
-                X-863935 in the inbox?”
+                <strong>Start with a demo question</strong>
+                Each chip calls the read-only tool that holds the answer and
+                lights a gap when something is missing, unreadable, low
+                confidence, or not in the inbox.
+                <div className={styles.chips}>
+                  {DEMO_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt.label}
+                      type="button"
+                      className={styles.chip}
+                      disabled={streaming}
+                      onClick={() => void ask(prompt.question)}
+                    >
+                      {prompt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
               messages.map((m) => (
@@ -195,6 +276,22 @@ export default function HomePage() {
               ))
             )}
           </div>
+
+          {messages.length > 0 ? (
+            <div className={styles.chips} aria-label="Demo prompts">
+              {DEMO_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt.label}
+                  type="button"
+                  className={styles.chip}
+                  disabled={streaming}
+                  onClick={() => void ask(prompt.question)}
+                >
+                  {prompt.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <form className={styles.composer} onSubmit={handleSubmit}>
             <textarea

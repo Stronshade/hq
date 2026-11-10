@@ -6,10 +6,10 @@ This project uses a small multi-role design. Chat uses a **LangChain tool-callin
 
 | Use | Model | Notes |
 |-----|-------|-------|
-| Chat + optional LLM refine | `qwen3-14b-16k` (or `qwen3:14b`) via Ollama | Runtime `num_ctx=16384` (do not rely on Ollama’s 4k default) |
-| Embeddings (optional chunks) | `nomic-embed-text` | Used when denote runs without `--skip-chunks` |
+| Chat + optional LLM refine | `LLM_MODEL` (default preset `qwen3-14b-16k`) | OpenAI-compatible `/v1/chat/completions`. Ollama preset sends `num_ctx=16384`. |
+| Embeddings (optional chunks) | `EMBED_MODEL` (default preset `nomic-embed-text`) | Same host as chat unless `EMBED_BASE_URL` is set. Used when denote runs without `--skip-chunks`. |
 
-Provider: **local Ollama only** for the take-home (`LLM_PROVIDER=ollama`). Prefer **host GPU** Ollama; Docker CPU Ollama is much slower.
+Chat and DenoteWorker call whatever OpenAI-compatible endpoint `LLM_API_KEY` + `LLM_BASE_URL` point at (OpenAI, Groq, Together, OpenRouter, vLLM, LM Studio, or Ollama `/v1`). Ollama remains the default preset. Prefer host GPU Ollama when using that preset; Docker CPU Ollama is much slower.
 
 ## Roles
 

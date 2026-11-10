@@ -16,3 +16,4 @@ Full-corpus embeddings require denote **without** `--skip-chunks`. A rules-only 
 ## Failure modes
 
 - Empty retrieval → orchestrator should admit limited evidence (`no_matches` / low confidence).
+- Structured demo questions skip this prefetch so a chunk that merely mentions “inbox” cannot hide `no_matches` for a named invoice that is not in the extracted fields. `search_chunks` stays available as a follow-up tool.

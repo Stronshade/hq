@@ -41,19 +41,51 @@ class SearchMessagesArgs(BaseModel):
     limit: int = Field(12, ge=1, le=40)
 
 
-class MessageIdArgs(BaseModel):
-    message_id: str = Field(..., description="Front message UUID")
+class AnnotationArgs(BaseModel):
+    message_id: str | None = Field(
+        None,
+        description="Front message UUID. Omit for inbox-wide counts by doc_type and status.",
+    )
+    doc_type: str | None = Field(
+        None,
+        description="Optional filter: invoice, statement, payment_reminder, remittance, escalation, final_notice, other.",
+    )
+    status: str | None = Field(None, description="Optional filter: ok, low_confidence, or error.")
+    limit: int = Field(8, ge=1, le=40, description="Sample size when doc_type or status is set.")
 
 
 class InvoiceArgs(BaseModel):
     vendor: str | None = Field(None, description="Vendor name filter")
     invoice_number: str | None = Field(None, description="Invoice number filter")
+    status: str | None = Field(
+        None,
+        description="Row status filter. status=unreadable returns error_detail counts and a short sample, not every row.",
+    )
     limit: int = Field(40, ge=1, le=200)
 
 
 class ChaseArgs(BaseModel):
     vendor: str | None = Field(None, description="Vendor name filter")
-    stage: str | None = Field(None, description="Chase stage: reminder|escalation|final")
+    stage: str | None = Field(
+        None,
+        description="Chase stage: reminder, escalation, or final_notice. 'final' and 'final notice' alias to final_notice.",
+    )
+    present: bool | None = Field(
+        None,
+        description="Filter invoice_present_in_inbox. False means no exact invoice-number match.",
+    )
+    limit: int = Field(40, ge=1, le=200)
+
+
+class AttachmentMetaArgs(BaseModel):
+    fil_id: str | None = Field(
+        None,
+        description="Front attachment id starting with fil_. Omit to list attachments by status.",
+    )
+    status: str | None = Field(
+        None,
+        description="When fil_id is omitted, list rows with this status (missing_file, unreadable, ok).",
+    )
     limit: int = Field(40, ge=1, le=200)
 
 
@@ -109,29 +141,52 @@ class InternalToolClient:
     async def search_messages(self, q: str, limit: int = 12) -> str:
         return await self._get("/internal/messages/search", {"q": q, "limit": limit})
 
-    async def get_annotations(self, message_id: str) -> str:
-        return await self._get(f"/internal/messages/{message_id}/annotations")
+    async def get_annotations(
+        self,
+        message_id: str | None = None,
+        doc_type: str | None = None,
+        status: str | None = None,
+        limit: int = 8,
+    ) -> str:
+        if message_id:
+            return await self._get(f"/internal/messages/{message_id}/annotations")
+        return await self._get(
+            "/internal/annotations",
+            {"doc_type": doc_type, "status": status, "limit": limit},
+        )
 
     async def get_invoice_fields(
         self,
         vendor: str | None = None,
         invoice_number: str | None = None,
+        status: str | None = None,
         limit: int = 40,
     ) -> str:
         return await self._get(
             "/internal/invoices",
-            {"vendor": vendor, "invoice_number": invoice_number, "limit": limit},
+            {"vendor": vendor, "invoice_number": invoice_number, "status": status, "limit": limit},
         )
 
     async def get_chase_events(
         self,
         vendor: str | None = None,
         stage: str | None = None,
+        present: bool | None = None,
         limit: int = 40,
     ) -> str:
-        return await self._get("/internal/chase", {"vendor": vendor, "stage": stage, "limit": limit})
+        return await self._get(
+            "/internal/chase",
+            {"vendor": vendor, "stage": stage, "present": present, "limit": limit},
+        )
 
-    async def list_attachment_meta(self, fil_id: str) -> str:
+    async def list_attachment_meta(
+        self,
+        fil_id: str | None = None,
+        status: str | None = None,
+        limit: int = 40,
+    ) -> str:
+        if not fil_id:
+            return await self._get("/internal/attachments", {"status": status, "limit": limit})
         raw = await self._get(f"/internal/attachments/{fil_id}")
         try:
             data = json.loads(raw)
@@ -192,31 +247,48 @@ def build_tools_for_role(role: RoleName, client: InternalToolClient) -> list[Str
         "get_annotations": StructuredTool.from_function(
             coroutine=client.get_annotations,
             name="get_annotations",
-            description="Get doc_type annotation + confidence for a message_id.",
-            args_schema=MessageIdArgs,
+            description=(
+                "Message classification. Pass message_id for one annotation. "
+                "Omit message_id for by_doc_type and by_status totals plus the low_confidence/error "
+                "rationale histogram. Pass doc_type and/or status for a total and a short subject sample. "
+                "Quote those totals. Do not relabel low-confidence other as invoice or reminder."
+            ),
+            args_schema=AnnotationArgs,
         ),
         "get_invoice_fields": StructuredTool.from_function(
             coroutine=client.get_invoice_fields,
             name="get_invoice_fields",
             description=(
-                "Look up invoice fields by invoice_number and/or vendor. "
+                "Look up invoice fields by invoice_number, vendor, and/or status. "
+                "Always returns total, returned, and truncated. "
+                "A named number with total 0 has found=false — do not invent an amount. "
                 "Pass the invoice number alone when the user names one. "
-                "A number also matches attachment filenames; amount, currency, and dates are null "
-                "with status=not_extracted when only the filename matched. Returns attachment_fil_id."
+                "status=unreadable returns error_detail counts and a few sample rows with null amounts. "
+                "A 6+ digit number also matches attachment filenames; shorter tokens are literal "
+                "and must not be collapsed to their digits."
             ),
             args_schema=InvoiceArgs,
         ),
         "get_chase_events": StructuredTool.from_function(
             coroutine=client.get_chase_events,
             name="get_chase_events",
-            description="List vendor chase / reminder / escalation events.",
+            description=(
+                "List vendor chase events with subject, stage_counts, total, and truncated. "
+                "Stages are reminder, escalation, and final_notice (final / final notice are aliases). "
+                "invoice_present_in_inbox is an exact case-insensitive match against extracted invoice numbers. "
+                "An empty referenced_invoice_numbers list means no number was extracted. "
+                "If truncated, say so and do not invent rows."
+            ),
             args_schema=ChaseArgs,
         ),
         "list_attachment_meta": StructuredTool.from_function(
             coroutine=client.list_attachment_meta,
             name="list_attachment_meta",
-            description="Attachment metadata only (status, filename). Never returns filesystem paths.",
-            args_schema=FilIdArgs,
+            description=(
+                "Attachment metadata only. Pass fil_id for one file, or status (for example missing_file) "
+                "to list rows with total and counts by filename. Never returns filesystem paths."
+            ),
+            args_schema=AttachmentMetaArgs,
         ),
         "fetch_attachment_text": StructuredTool.from_function(
             coroutine=client.fetch_attachment_text,

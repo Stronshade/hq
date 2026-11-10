@@ -68,8 +68,37 @@
   margin: auto;
   text-align: center;
   color: var(--ink-muted);
-  max-width: 22rem;
+  max-width: 40rem;
   line-height: 1.5;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+  margin-top: 0.85rem;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .empty strong {

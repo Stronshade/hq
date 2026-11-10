@@ -127,6 +127,115 @@ def invoice_number_keys(number: str) -> list[str]:
     return out
 
 
+def invoice_lookup_keys(invoice_number: str) -> tuple[list[str], bool]:
+    """Match keys, and whether digit-only equality is allowed.
+
+    Digit-only equality (leading-zero tolerant) runs only when the query
+    itself contains a run of 6 or more digits. ``ZZ-DOES-NOT-EXIST-999``
+    stays a literal so it cannot collapse to ``999``.
+    """
+    raw = (invoice_number or "").strip()
+    if not raw:
+        return [], False
+    runs = _DIGIT_RUN_RE.findall(raw)
+    if not runs:
+        return [raw], False
+    keys: list[str] = []
+    seen: set[str] = set()
+    for run in runs:
+        for key in invoice_number_keys(run):
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return (keys or [raw]), bool(keys)
+
+
+def page_meta(total: int, returned: int) -> dict[str, Any]:
+    """Totals that stay visible when a tool page is shorter than the match set."""
+    return {"total": int(total), "returned": int(returned), "truncated": int(returned) < int(total)}
+
+
+_CHASE_STAGES = {
+    "reminder": "reminder",
+    "payment reminder": "reminder",
+    "escalation": "escalation",
+    "final": "final_notice",
+    "final notice": "final_notice",
+    "final notices": "final_notice",
+}
+
+CHASE_MATCH_POLICY = (
+    "invoice_present_in_inbox is true only when a referenced number equals an "
+    "extracted invoice number (exact match, case-insensitive). Junk tokens can "
+    "look present. An empty referenced_invoice_numbers list means no number was extracted."
+)
+
+
+def normalize_chase_stage(stage: str | None) -> str | None:
+    """Map demo wording onto stored stage values."""
+    if stage is None:
+        return None
+    key = re.sub(r"[_\s]+", " ", stage.strip().lower())
+    if not key:
+        return None
+    return _CHASE_STAGES.get(key, key.replace(" ", "_"))
+
+
+_DOC_TYPES = {
+    "invoice": "invoice",
+    "invoices": "invoice",
+    "statement": "statement",
+    "statements": "statement",
+    "payment reminder": "payment_reminder",
+    "payment reminders": "payment_reminder",
+    "remittance": "remittance",
+    "remittances": "remittance",
+    "escalation": "escalation",
+    "escalations": "escalation",
+    "final notice": "final_notice",
+    "final notices": "final_notice",
+    "final": "final_notice",
+    "other": "other",
+}
+
+
+def normalize_doc_type(doc_type: str | None) -> str | None:
+    if doc_type is None:
+        return None
+    key = re.sub(r"[_\s]+", " ", doc_type.strip().lower())
+    if not key:
+        return None
+    return _DOC_TYPES.get(key, key.replace(" ", "_"))
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _clip_detail(value: Any, limit: int = 240) -> str | None:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if len(text_value) > limit:
+        return text_value[: limit - 1] + "…"
+    return text_value
+
+
+_ABS_PATH_RE = re.compile(
+    r"(?:[A-Za-z]:\\[^\s\"']+|/(?:data|Users|home|var|opt|tmp|app)/[^\s\"']+)"
+)
+
+
+def _public_error_detail(value: Any) -> str | None:
+    """Drop absolute paths. Keep the stored relative error sentence."""
+    text_value = _clip_detail(value, 500)
+    if not text_value:
+        return text_value
+    return _ABS_PATH_RE.sub("[path]", text_value)
+
+
 def number_matches_text(query_number: str, text_value: str) -> bool:
     """True when text contains the number, ignoring one leading zero."""
     if not query_number or not text_value:
@@ -451,7 +560,26 @@ async def search_messages(session: AsyncSession, q: str, *, limit: int = 12) -> 
     }
 
 
-async def get_annotations(session: AsyncSession, message_id: str) -> dict[str, Any]:
+async def get_annotations(
+    session: AsyncSession,
+    message_id: str | None = None,
+    *,
+    doc_type: str | None = None,
+    status: str | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    """One message, or inbox totals plus an optional filtered sample.
+
+    With no message id, return doc-type and status totals and the
+    low-confidence/error rationale histogram. Filters add ``total`` and a
+    short subject sample. DenoteWorker remains the only writer.
+    """
+    if message_id and str(message_id).strip():
+        return await _annotation_for_message(session, str(message_id).strip())
+    return await _annotation_summary(session, doc_type=doc_type, status=status, limit=limit)
+
+
+async def _annotation_for_message(session: AsyncSession, message_id: str) -> dict[str, Any]:
     try:
         mid = uuid.UUID(message_id)
     except ValueError as exc:
@@ -476,13 +604,154 @@ async def get_annotations(session: AsyncSession, message_id: str) -> dict[str, A
         "message_id": message_id,
         "annotation": {
             "doc_type": row["doc_type"],
-            "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
+            "confidence": _as_float(row["confidence"]),
             "rationale": row["rationale"],
             "model": row["model"],
             "status": row["status"],
             "error_detail": row["error_detail"],
         },
     }
+
+
+async def _annotation_summary(
+    session: AsyncSession,
+    *,
+    doc_type: str | None,
+    status: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    doc_type = normalize_doc_type(doc_type)
+    status_norm = status.strip().lower() if status and status.strip() else None
+    sample_limit = max(1, min(int(limit or 8), 40))
+
+    by_type_rows = (
+        await session.execute(
+            text(
+                """
+                SELECT doc_type, count(*)::int AS n
+                FROM agent.message_annotations
+                GROUP BY doc_type
+                ORDER BY n DESC, doc_type
+                """
+            )
+        )
+    ).mappings().all()
+    by_status_rows = (
+        await session.execute(
+            text(
+                """
+                SELECT status, count(*)::int AS n
+                FROM agent.message_annotations
+                GROUP BY status
+                ORDER BY n DESC, status
+                """
+            )
+        )
+    ).mappings().all()
+
+    hist_params: dict[str, Any] = {}
+    hist_where = ["status IN ('low_confidence', 'error')"]
+    if doc_type:
+        hist_where.append("doc_type = :doc_type")
+        hist_params["doc_type"] = doc_type
+    if status_norm:
+        hist_where.append("status = :status")
+        hist_params["status"] = status_norm
+    hist_rows = (
+        await session.execute(
+            text(
+                f"""
+                SELECT status, doc_type, rationale, error_detail, confidence, count(*)::int AS n
+                FROM agent.message_annotations
+                WHERE {" AND ".join(hist_where)}
+                GROUP BY status, doc_type, rationale, error_detail, confidence
+                ORDER BY n DESC, status, doc_type
+                LIMIT 20
+                """
+            ),
+            hist_params,
+        )
+    ).mappings().all()
+
+    payload: dict[str, Any] = {
+        "summary": True,
+        "by_doc_type": {str(r["doc_type"]): int(r["n"]) for r in by_type_rows},
+        "by_status": {str(r["status"]): int(r["n"]) for r in by_status_rows},
+        "rationale_histogram": [
+            {
+                "status": r["status"],
+                "doc_type": r["doc_type"],
+                "rationale": _clip_detail(r["rationale"], 300),
+                "error_detail": _public_error_detail(r["error_detail"]),
+                "confidence": _as_float(r["confidence"]),
+                "count": int(r["n"]),
+            }
+            for r in hist_rows
+        ],
+    }
+
+    if not doc_type and not status_norm:
+        return payload
+
+    filters = {"doc_type": doc_type, "status": status_norm}
+    params: dict[str, Any] = {"limit": sample_limit}
+    where = ["1=1"]
+    if doc_type:
+        where.append("a.doc_type = :doc_type")
+        params["doc_type"] = doc_type
+    if status_norm:
+        where.append("a.status = :status")
+        params["status"] = status_norm
+    where_sql = " AND ".join(where)
+    total = int(
+        (
+            await session.execute(
+                text(f"SELECT count(*)::int AS n FROM agent.message_annotations a WHERE {where_sql}"),
+                params,
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await session.execute(
+            text(
+                f"""
+                SELECT a.message_id::text AS message_id,
+                       m.subject,
+                       a.doc_type,
+                       a.confidence,
+                       a.rationale,
+                       a.status,
+                       a.error_detail
+                FROM agent.message_annotations a
+                LEFT JOIN frontapp.frontapp_messages m ON m.id = a.message_id
+                WHERE {where_sql}
+                ORDER BY a.confidence ASC, m.message_created_at DESC NULLS LAST
+                LIMIT :limit
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+    items = [
+        {
+            "message_id": r["message_id"],
+            "subject": r["subject"],
+            "doc_type": r["doc_type"],
+            "confidence": _as_float(r["confidence"]),
+            "rationale": _clip_detail(r["rationale"], 300),
+            "status": r["status"],
+            "error_detail": _public_error_detail(r["error_detail"]),
+        }
+        for r in rows
+    ]
+    payload.update(
+        {
+            "filters": filters,
+            **page_meta(total, len(items)),
+            "items": items,
+        }
+    )
+    return payload
 
 
 def _invoice_item(row: Any, *, filename: str | None = None) -> dict[str, Any]:
@@ -585,52 +854,167 @@ async def _filename_invoice_hits(
     return items
 
 
+_INVOICE_SELECT = """
+    SELECT message_id, attachment_fil_id, vendor, invoice_number, amount, currency,
+           invoice_date, due_date, po_number, overall_confidence, status, error_detail
+    FROM agent.invoice_fields
+"""
+
+
 async def get_invoice_fields(
     session: AsyncSession,
     *,
     vendor: str | None = None,
     invoice_number: str | None = None,
+    status: str | None = None,
     limit: int = 40,
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {"limit": limit}
+    """Invoice rows with a real total, even when the page is capped.
+
+    ``status=unreadable`` returns error_detail counts and a short sample of
+    rows (amounts stay whatever was stored, usually null) instead of every
+    failed PDF. A named number with zero rows sets ``found`` false.
+    """
+    page_limit = max(1, min(int(limit or 40), 200))
+    status_norm = status.strip().lower() if status and status.strip() else None
+    named = (invoice_number or "").strip()
+    params: dict[str, Any] = {}
+    clauses: list[str] = []
+    use_numeric = False
     # A provided invoice number is sufficient. Do not AND a vendor string that
     # would drop a filename hit whose extracted vendor is different.
-    if invoice_number:
-        _words, numbers = query_tokens(invoice_number)
-        if not numbers:
-            numbers = [invoice_number]
-        where = _query_where(
-            params,
-            [],
-            numbers,
-            fields=["invoice_number"],
-            include_filenames=False,
-            numeric_sql=_INVOICE_FIELD_SQL,
+    if named:
+        keys, use_numeric = invoice_lookup_keys(named)
+        clauses.append(
+            _query_where(
+                params,
+                [],
+                keys,
+                fields=["invoice_number"],
+                include_filenames=False,
+                numeric_sql=_INVOICE_FIELD_SQL if use_numeric else None,
+            )
         )
-    else:
-        where = "TRUE"
-        if vendor:
-            where = "vendor ILIKE :vendor ESCAPE '\\'"
-            params["vendor"] = _ilike_contains(vendor)
+    elif vendor and vendor.strip():
+        clauses.append("vendor ILIKE :vendor ESCAPE '\\'")
+        params["vendor"] = _ilike_contains(vendor.strip())
+    if status_norm:
+        clauses.append("status = :status")
+        params["status"] = status_norm
+    where = " AND ".join(clauses) if clauses else "TRUE"
+
+    total = int(
+        (
+            await session.execute(
+                text(f"SELECT count(*)::int AS n FROM agent.invoice_fields WHERE {where}"),
+                params,
+            )
+        ).scalar_one()
+    )
+
+    sample_limit = page_limit
+    by_error: list[dict[str, Any]] | None = None
+    if status_norm == "unreadable" and not named:
+        sample_limit = min(page_limit, 8)
+        grouped = (
+            await session.execute(
+                text(
+                    f"""
+                    SELECT coalesce(error_detail, '') AS error_detail, count(*)::int AS n
+                    FROM agent.invoice_fields
+                    WHERE {where}
+                    GROUP BY 1
+                    ORDER BY n DESC
+                    """
+                ),
+                params,
+            )
+        ).mappings().all()
+        by_error = [
+            {"error_detail": _public_error_detail(r["error_detail"]) or "(none)", "count": int(r["n"])}
+            for r in grouped
+        ]
+
     rows = (
         await session.execute(
             text(
                 f"""
-                SELECT message_id, attachment_fil_id, vendor, invoice_number, amount, currency,
-                       invoice_date, due_date, po_number, overall_confidence, status, error_detail
-                FROM agent.invoice_fields
+                {_INVOICE_SELECT}
                 WHERE {where}
                 ORDER BY invoice_date DESC NULLS LAST, created_at DESC
                 LIMIT :limit
                 """
             ),
-            params,
+            {**params, "limit": sample_limit},
         )
     ).mappings().all()
     items = [_invoice_item(r) for r in rows]
-    if invoice_number and not items:
-        items = await _filename_invoice_hits(session, invoice_number, limit=limit)
-    return {"count": len(items), "items": items}
+    if named and total == 0 and not status_norm:
+        filename_hits = await _filename_invoice_hits(session, named, limit=page_limit)
+        if filename_hits:
+            items = filename_hits
+            total = len(filename_hits)
+
+    payload: dict[str, Any] = {**page_meta(total, len(items)), "count": len(items), "items": items}
+    if named:
+        payload["invoice_number"] = named
+        payload["found"] = total > 0
+    if by_error is not None:
+        payload["by_error_detail"] = by_error
+    return payload
+
+
+def _chase_item(row: Any) -> dict[str, Any]:
+    refs = row["referenced_invoice_numbers"]
+    if isinstance(refs, str):
+        try:
+            import json
+
+            refs = json.loads(refs)
+        except Exception:  # noqa: BLE001
+            refs = [refs]
+    return {
+        "message_id": str(row["message_id"]),
+        "vendor": row["vendor"],
+        "stage": row["stage"],
+        "subject": row.get("subject"),
+        "referenced_invoice_numbers": refs if isinstance(refs, list) else refs,
+        "invoice_present_in_inbox": row["invoice_present_in_inbox"],
+        "confidence": _as_float(row["confidence"]),
+        "rationale": _clip_detail(row["rationale"], 300),
+        "status": row["status"],
+        "error_detail": _public_error_detail(row["error_detail"]),
+    }
+
+
+def diverse_page(representatives: list[dict[str, Any]], rest: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Keep one row of each stage, then fill the rest of the page."""
+    page: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in representatives + rest:
+        if len(page) >= limit:
+            break
+        ident = str(row.get("id") or row.get("message_id") or id(row))
+        if ident in seen:
+            continue
+        seen.add(ident)
+        page.append(row)
+    return page
+
+
+_CHASE_COLUMNS = """
+    c.id::text AS id,
+    c.message_id::text AS message_id,
+    c.vendor,
+    c.stage,
+    c.referenced_invoice_numbers,
+    c.invoice_present_in_inbox,
+    c.confidence,
+    c.rationale,
+    c.status,
+    c.error_detail,
+    m.subject
+"""
 
 
 async def get_chase_events(
@@ -638,51 +1022,187 @@ async def get_chase_events(
     *,
     vendor: str | None = None,
     stage: str | None = None,
+    present: bool | None = None,
     limit: int = 40,
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {"limit": limit}
+    """Chase rows with subject, stage totals computed before LIMIT, and truncation.
+
+    ``final`` and ``final notice`` alias to the stored stage ``final_notice``.
+    The page reserves one row per stage so a short limit cannot hide escalation
+    behind reminders.
+    """
+    page_limit = max(1, min(int(limit or 40), 200))
+    params: dict[str, Any] = {}
     where = ["1=1"]
-    if vendor:
-        where.append("vendor ILIKE :vendor")
-        params["vendor"] = f"%{vendor}%"
-    if stage:
-        where.append("stage = :stage")
-        params["stage"] = stage
-    rows = (
+    if vendor and vendor.strip():
+        where.append("c.vendor ILIKE :vendor ESCAPE '\\'")
+        params["vendor"] = _ilike_contains(vendor.strip())
+    stage_norm = normalize_chase_stage(stage)
+    if stage_norm:
+        where.append("c.stage = :stage")
+        params["stage"] = stage_norm
+    if present is not None:
+        where.append("c.invoice_present_in_inbox = :present")
+        params["present"] = present
+    where_sql = " AND ".join(where)
+    from_sql = """
+        FROM agent.vendor_chase_events c
+        LEFT JOIN frontapp.frontapp_messages m ON m.id = c.message_id
+    """
+
+    total = int(
+        (
+            await session.execute(
+                text(f"SELECT count(*)::int AS n {from_sql} WHERE {where_sql}"),
+                params,
+            )
+        ).scalar_one()
+    )
+    stage_rows = (
         await session.execute(
             text(
                 f"""
-                SELECT message_id, vendor, stage, referenced_invoice_numbers,
-                       invoice_present_in_inbox, confidence, rationale, status, error_detail
-                FROM agent.vendor_chase_events
-                WHERE {" AND ".join(where)}
-                ORDER BY created_at DESC
+                SELECT c.stage, count(*)::int AS n
+                {from_sql}
+                WHERE {where_sql}
+                GROUP BY c.stage
+                ORDER BY n DESC, c.stage
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+
+    reps = (
+        await session.execute(
+            text(
+                f"""
+                SELECT DISTINCT ON (c.stage) {_CHASE_COLUMNS}
+                {from_sql}
+                WHERE {where_sql}
+                ORDER BY c.stage, c.created_at DESC
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+    rep_ids = ",".join(str(r["id"]) for r in reps)
+    fill_params = {**params, "limit": page_limit, "rep_ids": rep_ids}
+    rest = (
+        await session.execute(
+            text(
+                f"""
+                SELECT {_CHASE_COLUMNS}
+                {from_sql}
+                WHERE {where_sql}
+                  AND (
+                    :rep_ids = ''
+                    OR c.id::text <> ALL(string_to_array(:rep_ids, ','))
+                  )
+                ORDER BY c.created_at DESC
+                LIMIT :limit
+                """
+            ),
+            fill_params,
+        )
+    ).mappings().all()
+    chosen = diverse_page([dict(r) for r in reps], [dict(r) for r in rest], page_limit)
+    items = [_chase_item(r) for r in chosen]
+    return {
+        **page_meta(total, len(items)),
+        "count": len(items),
+        "stage_counts": {str(r["stage"]): int(r["n"]) for r in stage_rows},
+        "match_policy": CHASE_MATCH_POLICY,
+        "items": items,
+    }
+
+
+async def list_attachments_by_status(
+    session: AsyncSession,
+    status: str,
+    *,
+    limit: int = 40,
+) -> dict[str, Any]:
+    """Compact attachment rows for one status. Never selects filesystem paths."""
+    status_norm = (status or "").strip().lower()
+    if not status_norm:
+        raise ToolError("tool_denied", "status is required when fil_id is omitted")
+    page_limit = max(1, min(int(limit or 40), 200))
+    params: dict[str, Any] = {"status": status_norm, "limit": page_limit}
+    total = int(
+        (
+            await session.execute(
+                text(
+                    """
+                    SELECT count(*)::int AS n
+                    FROM agent.attachment_status
+                    WHERE status = :status
+                    """
+                ),
+                params,
+            )
+        ).scalar_one()
+    )
+    names = (
+        await session.execute(
+            text(
+                """
+                SELECT coalesce(filename, '(none)') AS filename, count(*)::int AS n
+                FROM agent.attachment_status
+                WHERE status = :status
+                GROUP BY 1
+                ORDER BY n DESC, filename
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT fil_id, filename, error_detail, message_id::text AS message_id
+                FROM agent.attachment_status
+                WHERE status = :status
+                ORDER BY filename NULLS LAST, fil_id
                 LIMIT :limit
                 """
             ),
             params,
         )
     ).mappings().all()
+    items = [
+        {
+            "fil_id": r["fil_id"],
+            "filename": r["filename"],
+            "error_detail": _public_error_detail(r["error_detail"]),
+            "message_id": r["message_id"],
+        }
+        for r in rows
+    ]
     return {
-        "count": len(rows),
-        "items": [
-            {
-                "message_id": str(r["message_id"]),
-                "vendor": r["vendor"],
-                "stage": r["stage"],
-                "referenced_invoice_numbers": r["referenced_invoice_numbers"],
-                "invoice_present_in_inbox": r["invoice_present_in_inbox"],
-                "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
-                "rationale": r["rationale"],
-                "status": r["status"],
-                "error_detail": r["error_detail"],
-            }
-            for r in rows
-        ],
+        "status": status_norm,
+        **page_meta(total, len(items)),
+        "by_filename": [{"filename": r["filename"], "count": int(r["n"])} for r in names],
+        "items": items,
     }
 
 
-async def list_attachment_meta(session: AsyncSession, fil_id: str) -> dict[str, Any]:
+async def list_attachment_meta(
+    session: AsyncSession,
+    fil_id: str | None = None,
+    *,
+    status: str | None = None,
+    limit: int = 40,
+) -> dict[str, Any]:
+    if fil_id and str(fil_id).strip():
+        return await _attachment_meta_for_id(session, str(fil_id).strip())
+    if status and str(status).strip():
+        return await list_attachments_by_status(session, status, limit=limit)
+    raise ToolError("tool_denied", "fil_id or status is required")
+
+
+async def _attachment_meta_for_id(session: AsyncSession, fil_id: str) -> dict[str, Any]:
     fid = _safe_fil_id(fil_id)
     rows = (
         await session.execute(
