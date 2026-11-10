@@ -132,7 +132,13 @@ Leave **Docker Command empty**. Render splits that field on spaces and passes th
 
 ### Environment
 
-Copy the **Internal Database URL** from the Postgres instance. Change only the scheme. Keep the user, password, host, port, and database name exactly as Render shows them. Internal connections stay on Render's private network and do not use `sslmode`.
+Copy the **Internal Database URL** from the Postgres instance. It starts with `postgresql://`. This image does not install the `psycopg` driver that plain `postgresql://` selects, so change the scheme and keep the user, password, host, port, and database name exactly as Render shows them. Internal connections stay on Render's private network and do not use `sslmode`.
+
+```text
+postgresql://USER:PASSWORD@HOST/DBNAME
+```
+
+becomes both of these:
 
 ```text
 DATABASE_URL=postgresql+asyncpg://USER:PASSWORD@HOST/DBNAME
@@ -233,6 +239,7 @@ Wake the API with `/health` first if the tab has been idle. The web service slee
 | Web build cannot find `package.json` | Set the web service root directory to `web`. |
 | `/health` is 502 for about a minute | The free instance is waking. Wait and retry. |
 | `/health` stays `degraded` | The restore did not create `frontapp.frontapp_messages`. Check the external URL and `pg_restore` output. |
+| `ModuleNotFoundError: No module named 'psycopg'` | `DATABASE_URL` is still `postgresql://`. Change it to `postgresql+asyncpg://` and set `DATABASE_URL_SYNC` to `postgresql+psycopg2://` with the same user, password, host, and database. |
 | API logs `password authentication failed` | The internal URL was edited incorrectly, or a special character in the password was not URL-encoded. |
 | API logs `could not translate host name` | The service is using the external host from inside Render, or it is in a different region from the database. Use the internal host in the same region. |
 | Chat returns 401 or `invalid api key` | `LLM_API_KEY` does not match the AI Studio key. `LLM_BASE_URL` has to be `https://generativelanguage.googleapis.com/v1beta/openai`. |
