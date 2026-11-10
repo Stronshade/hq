@@ -314,7 +314,14 @@ def fact_lines(tool: str, payload: dict[str, Any]) -> list[str]:
     for row in payload.get("by_error_detail") or []:
         lines.append(f"error_detail count={row.get('count')}: {row.get('error_detail')}")
 
-    for row in payload.get("by_filename") or []:
+    filenames = payload.get("by_filename") or []
+    if filenames:
+        top = filenames[0]
+        lines.append(
+            f"REQUIRED filename count: {top.get('filename')} = {top.get('count')} of total {payload.get('total')}. "
+            "Quote this before the sample rows."
+        )
+    for row in filenames:
         lines.append(f"filename count={row.get('count')}: {row.get('filename')}")
 
     if tool == "get_annotations":
@@ -358,7 +365,10 @@ def fact_lines(tool: str, payload: dict[str, Any]) -> list[str]:
             lines.append(
                 f"fil_id={payload.get('fil_id')} count={payload.get('count')}"
             )
-        for item in (payload.get("items") or [])[:8]:
+        sample_items = payload.get("items") or []
+        if payload.get("by_filename"):
+            sample_items = sample_items[:4]
+        for item in sample_items:
             lines.append(
                 f"attachment fil_id={item.get('fil_id')} filename={item.get('filename')!r} "
                 f"status={item.get('status')} inline={item.get('is_inline')} "
