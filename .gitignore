@@ -1,0 +1,35 @@
+# Secrets / local env
+.env
+.env.local
+.env.*.local
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+app/debug-*.ndjson
+
+# Node
+web/node_modules/
+web/.next/
+web/out/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Debug / agent logs
+.cursor/debug-*.log
+
+# Candidate inbox export — sensitive, text-extractable. Never commit or push.
+ap_inbox_candidate.sql
+attachments/

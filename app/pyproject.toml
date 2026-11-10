@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ap-inbox"
+version = "0.1.0"
+description = "AP Inbox Agent — FastAPI + Postgres annotated Front inbox"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30.0",
+  "psycopg2-binary>=2.9.10",
+  "alembic>=1.14.0",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.6.0",
+  "openai>=1.57.0",
+  "httpx>=0.28.0",
+  "pypdf>=5.1.0",
+  "python-dotenv>=1.0.1",
+  "sse-starlette>=2.1.3",
+  "langchain-core>=0.3.0",
+  "langchain-ollama>=0.2.0",
+  "tiktoken>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+ap-inbox-denote = "ap_inbox.pipeline.denote:main"

@@ -1,0 +1,5 @@
+# Derived tag so tool-call quality does not depend on ambient Ollama defaults.
+# Declared model context for qwen3:14b is 40960; runtime num_ctx pinned to 16384.
+FROM qwen3:14b
+PARAMETER num_ctx 16384
+PARAMETER temperature 0.2

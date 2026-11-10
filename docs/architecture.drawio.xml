@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-11-09T00:00:00.000Z" agent="AP Inbox Agent" version="22.1.0" type="device">
+  <diagram id="ap-inbox-arch" name="AP Inbox Agent Architecture">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="L1" value="1. Sources" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="120" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="L2" value="2. Ingest" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="120" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="L3" value="3. Store" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="120" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="L4" value="4. DenoteWorker (writes agent.*)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="500" width="280" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="L5" value="5. Chat path (read-only) — LangChain tools, no LangGraph" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="720" width="420" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="L6" value="6. Context budget num_ctx=16384" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1020" width="280" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="src_sql" value="ap_inbox_candidate.sql&#xa;(Postgres 15 dump, frontapp)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="80" y="70" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="src_att" value="attachments/ RO mount&#xa;fil_*__filename" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="340" y="70" width="220" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ing_import" value="scripts/import_dump.sh&#xa;(sanitize, psql)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="80" y="220" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ing_resolver" value="attachment resolver&#xa;fil_* → status / gap (never silent)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="340" y="220" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="store_raw" value="frontapp.* (immutable)&#xa;messages, conversations" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="80" y="360" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="store_agent" value="agent.* annotated&#xa;annotations · invoices · chase&#xa;attachment_status · document_chunks&#xa;(JSONB embeddings, in-app cosine)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="320" y="350" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="store_pg" value="Postgres 15 (no pgvector swap)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="620" y="380" width="180" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="den_classify" value="classify" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="80" y="550" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="den_extract" value="extract invoice" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="210" y="550" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="den_chunk" value="chunk 768/128&#xa;+ nomic embed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="350" y="540" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="den_chase" value="chase detect" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="510" y="550" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="den_gaps" value="gaps&#xa;missing_file · unreadable · low_confidence" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="650" y="540" width="200" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="web_next" value="Next.js SSE client&#xa;status · citation · gap · token · done" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="80" y="770" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="orch" value="OrchestratorAgent&#xa;LangChain tool loop&#xa;max iterations=6&#xa;context accounting logs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="320" y="760" width="200" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="gw" value="Tool Gateway HTTP&#xa;/internal/* + X-Internal-Token&#xa;roles: Orchestrator / AttachmentReader" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="560" y="760" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="tools" value="search_messages · get_annotations&#xa;get_invoice_fields · get_chase&#xa;list_attachment_meta · fetch_attachment_text&#xa;(text via HTTP — no FS paths to LLM)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="840" y="750" width="260" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="ollama" value="Ollama Docker&#xa;qwen3-14b-16k (num_ctx=16384)&#xa;nomic-embed-text" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="320" y="900" width="220" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="budget" value="sys~800 · tools~1200 · hist~2000 · docs~10000 · completion~2384&#xa;CHUNK_TOKENS=768 · CHUNK_OVERLAP=128 · max chunks/turn=12" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1060" width="520" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="defer" value="Defer LangGraph until Front webhooks + HITL / durable state machines" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="640" y="1060" width="360" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="src_sql" target="ing_import"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="src_att" target="ing_resolver"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="ing_import" target="store_raw"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="ing_resolver" target="store_agent"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="store_raw" target="den_classify"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="den_classify" target="den_extract"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="den_extract" target="den_chunk"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="den_chunk" target="den_chase"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="den_chase" target="den_gaps"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="den_chunk" target="store_agent"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="web_next" target="orch"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="orch" target="gw"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="gw" target="tools"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="tools" target="store_agent"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="orch" target="ollama"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="1" source="store_agent" target="store_pg"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

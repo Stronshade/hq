@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ap_inbox}
+      POSTGRES_USER: ${POSTGRES_USER:-ap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ap_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ap} -d ${POSTGRES_DB:-ap_inbox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Optional local LLM: docker compose --profile local-llm up -d
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-llm"]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    environment:
+      # Soft hint; Modelfile tag qwen3-14b-16k still pins PARAMETER num_ctx 16384
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./ollama:/modelfiles:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  # One-shot helper: docker compose --profile local-llm run --rm ollama-init
+  ollama-init:
+    image: ollama/ollama:latest
+    profiles: ["local-llm"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Pulling nomic-embed-text..."
+        ollama pull nomic-embed-text
+        echo "Pulling qwen3:14b..."
+        ollama pull qwen3:14b
+        echo "Creating qwen3-14b-16k (num_ctx=16384)..."
+        ollama create qwen3-14b-16k -f /modelfiles/Modelfile.qwen3-14b-16k
+        ollama list
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./ollama:/modelfiles:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ap}:${POSTGRES_PASSWORD:-ap_dev_password}@postgres:5432/${POSTGRES_DB:-ap_inbox}
+      DATABASE_URL_SYNC: postgresql+psycopg2://${POSTGRES_USER:-ap}:${POSTGRES_PASSWORD:-ap_dev_password}@postgres:5432/${POSTGRES_DB:-ap_inbox}
+      ATTACHMENTS_DIR: /data/attachments
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      # Prefer host GPU Ollama (AMD/NVIDIA on Windows). Do not publish compose ollama on 11434
+      # while using the host daemon — it shadows host.docker.internal:11434.
+      # Optional compose CPU fallback: OPENAI_BASE_URL_DOCKER=http://ollama:11434/v1 (+ profile local-llm)
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL_DOCKER:-http://host.docker.internal:11434/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-ollama}
+      OPENAI_MODEL: ${OPENAI_MODEL:-qwen3:14b}
+      LLM_MODEL: ${LLM_MODEL:-qwen3-14b-16k}
+      LLM_NUM_CTX: ${LLM_NUM_CTX:-16384}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      CHUNK_TOKENS: ${CHUNK_TOKENS:-768}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-128}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-dev-internal-token-change-me}
+      # Orchestrator tools call the same process; loopback is correct inside the api container
+      INTERNAL_API_BASE_URL: http://127.0.0.1:8000
+      LLM_SOFT_PROMPT_BUDGET: ${LLM_SOFT_PROMPT_BUDGET:-13000}
+      LLM_RESERVED_COMPLETION: ${LLM_RESERVED_COMPLETION:-2384}
+      LLM_MAX_TOOL_ITERATIONS: ${LLM_MAX_TOOL_ITERATIONS:-6}
+      LLM_MAX_CHUNKS_PER_TURN: ${LLM_MAX_CHUNKS_PER_TURN:-12}
+      LLM_MAX_ATTACHMENT_CHARS: ${LLM_MAX_ATTACHMENT_CHARS:-20000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./app:/app
+      - ./attachments:/data/attachments:ro
+      - ./ap_inbox_candidate.sql:/data/ap_inbox_candidate.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+    profiles: ["web"]
+
+volumes:
+  pgdata:
+  ollama_data:
