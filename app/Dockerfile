@@ -17,4 +17,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn ap_inbox.main:app --host 0.0.0.0 --port 8000 --reload"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn ap_inbox.main:app --host 0.0.0.0 --port 8000"]
